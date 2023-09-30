@@ -22,5 +22,5 @@
 int zend_file_cache_script_store(zend_persistent_script *script, bool in_shm);
 zend_persistent_script *zend_file_cache_script_load(zend_file_handle *file_handle);
 void zend_file_cache_invalidate(zend_string *full_path);
-
+int zend_opcache_copy_opcode_cache_file(char *src_filename, char* opcode_file);
 #endif /* ZEND_FILE_CACHE_H */

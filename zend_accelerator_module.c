@@ -32,6 +32,7 @@
 #include "ext/standard/info.h"
 #include "ext/standard/php_filestat.h"
 #include "opcache_arginfo.h"
+#include "zend_file_cache.h"
 
 #if HAVE_JIT
 #include "jit/zend_jit.h"
@@ -293,7 +294,8 @@ ZEND_INI_BEGIN()
 	STD_PHP_INI_BOOLEAN("opcache.enable_cli"             , "0"   , PHP_INI_SYSTEM, OnUpdateBool,              accel_directives.enable_cli,                zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.error_log"                , ""    , PHP_INI_SYSTEM, OnUpdateString,	         accel_directives.error_log,                 zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.restrict_api"             , ""    , PHP_INI_SYSTEM, OnUpdateString,	         accel_directives.restrict_api,              zend_accel_globals, accel_globals)
-
+	STD_PHP_INI_ENTRY("opcache.allow_direct_exec_opcode" , "0"    , PHP_INI_SYSTEM, OnUpdateBool,	         accel_directives.allow_direct_exec_opcode,  zend_accel_globals, accel_globals)
+	STD_PHP_INI_ENTRY("opcache.prohibit_different_version_opcode" , "1"    , PHP_INI_SYSTEM, OnUpdateBool,	   accel_directives.prohibit_different_version_opcode,  zend_accel_globals, accel_globals)
 #ifndef ZEND_WIN32
 	STD_PHP_INI_ENTRY("opcache.lockfile_path"             , "/tmp"    , PHP_INI_SYSTEM, OnUpdateString,           accel_directives.lockfile_path,              zend_accel_globals, accel_globals)
 #else
@@ -779,6 +781,8 @@ ZEND_FUNCTION(opcache_get_configuration)
 	add_assoc_bool(&directives,   "opcache.record_warnings",        ZCG(accel_directives).record_warnings);
 	add_assoc_bool(&directives,   "opcache.enable_file_override",   ZCG(accel_directives).file_override_enabled);
 	add_assoc_long(&directives, 	 "opcache.optimization_level",     ZCG(accel_directives).optimization_level);
+	add_assoc_bool(&directives, "opcache.allow_direct_exec_opcode", ZCG(accel_directives).allow_direct_exec_opcode);
+	add_assoc_bool(&directives, "opcache.prohibit_different_version_opcode", ZCG(accel_directives).prohibit_different_version_opcode);
 
 #ifndef ZEND_WIN32
 	add_assoc_string(&directives, "opcache.lockfile_path",          STRING_NOT_NULL(ZCG(accel_directives).lockfile_path));
@@ -891,12 +895,13 @@ ZEND_FUNCTION(opcache_invalidate)
 ZEND_FUNCTION(opcache_compile_file)
 {
 	zend_string *script_name;
+	zend_string *opcode_file = NULL;
 	zend_file_handle handle;
 	zend_op_array *op_array = NULL;
 	zend_execute_data *orig_execute_data = NULL;
 	uint32_t orig_compiler_options;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &script_name) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S|S", &script_name, &opcode_file) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -904,7 +909,23 @@ ZEND_FUNCTION(opcache_compile_file)
 		zend_error(E_NOTICE, ACCELERATOR_PRODUCT_NAME " has not been properly started, can't compile file");
 		RETURN_FALSE;
 	}
-
+	
+	if(opcode_file != NULL) {
+		if(!file_cache_only) {
+			zend_error(E_NOTICE, ACCELERATOR_PRODUCT_NAME " has been disable 'opcache.file_cache_only' option in php.ini, can't store opcode to file");
+			RETURN_FALSE;
+		}
+		if(access(ZSTR_VAL(opcode_file), F_OK) != -1) {
+			zend_error(E_WARNING, "File %s already exists", ZSTR_VAL(opcode_file));
+			RETURN_FALSE;
+		}
+#ifdef HAVE_JIT
+	if (JIT_G(on)) {
+		zend_error(E_NOTICE, ACCELERATOR_PRODUCT_NAME " has been enabled JIT, can't store opcode to file");
+		RETURN_FALSE;
+	}
+#endif
+	}
 	zend_stream_init_filename_ex(&handle, script_name);
 
 	orig_execute_data = EG(current_execute_data);
@@ -930,7 +951,12 @@ ZEND_FUNCTION(opcache_compile_file)
 	if(op_array != NULL) {
 		destroy_op_array(op_array);
 		efree(op_array);
-		RETVAL_TRUE;
+		if(opcode_file != NULL &&
+			 zend_opcache_copy_opcode_cache_file(ZSTR_VAL(script_name), ZSTR_VAL(opcode_file)) == FAILURE) {
+				RETVAL_FALSE;
+		} else {
+			RETVAL_TRUE;
+		}
 	} else {
 		RETVAL_FALSE;
 	}

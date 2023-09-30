@@ -161,6 +161,9 @@ typedef struct _zend_accel_directives {
 	bool      file_override_enabled;
 	bool      enable_cli;
 	bool      validate_permission;
+	bool      allow_direct_exec_opcode;
+	bool      prohibit_different_version_opcode;
+	
 #ifndef ZEND_WIN32
 	bool      validate_root;
 #endif
